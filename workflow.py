@@ -1,8 +1,4 @@
 
-'''
-
-Current issue is infinite tool call recursion!!!!!!!!!!!
-The output returned by tool is understood by the agent as a tool call and it calls the tool again and again.'''
 import os
 from dotenv import load_dotenv
 from utils import capture_image, tts
@@ -16,12 +12,11 @@ from langchain_core.messages import get_buffer_string, HumanMessage, AIMessage
 import tiktoken
 from langchain_core.runnables import RunnableConfig
 
-
 # Setup environment
 load_dotenv()
 openai_api_key = os.getenv("OPENAI_API_KEY")
 
-# Memory 
+# Memory s
 memory = MemorySaver()
 
 class State(TypedDict):

@@ -8,7 +8,10 @@ from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import tool
 from langchain_openai.embeddings import OpenAIEmbeddings
 from langchain_core.vectorstores import InMemoryVectorStore
+from langchain_community.docstore import InMemoryDocstore
+from langchain_community.vectorstores import FAISS
 import os
+import faiss
 from typing import List
 from dotenv import load_dotenv
 # Tools for memory
@@ -21,7 +24,23 @@ if not openai_api_key:
     raise ValueError("OpenAI API Key not found")
 
 # For context memory
-recall_vectorstore = InMemoryVectorStore(OpenAIEmbeddings(api_key = openai_api_key))
+VECTORSTORE_FILE = "vectorstore.faiss"  # File for local FAISS persistence
+
+# Load existing FAISS vector store or create a new one
+try:
+    recall_vectorstore = FAISS.load_local(VECTORSTORE_FILE, OpenAIEmbeddings(api_key=openai_api_key), allow_dangerous_deserialization=True)
+    print("Loaded existing vector store.")
+except:
+    index = faiss.IndexFlatL2(len(OpenAIEmbeddings().embed_query("hello world")))
+
+    recall_vectorstore = FAISS(
+        embedding_function=OpenAIEmbeddings(),
+        index=index,
+        docstore= InMemoryDocstore(),
+        index_to_docstore_id={}
+    )   
+    recall_vectorstore.save_local(VECTORSTORE_FILE)
+    print("Initialized a new vector store.")
 
 # Tools to search and store memory
 
@@ -39,6 +58,7 @@ def save_recall_memory(memory: str, config: RunnableConfig) -> str:
         page_content = memory, id = str(uuid.uuid4()), metadata = {"user_id": user_id}
     )
     recall_vectorstore.add_documents([document])
+    print(document)
     return f"Memory saved for long-term: {memory}"
 
 @tool
@@ -47,11 +67,14 @@ def search_recall_memories(query: str, config: RunnableConfig) -> List[str]:
     user_id = get_user_id(config)
 
     def _filter_function(doc: Document) -> bool:
-        return doc.metadata.get("user_id") == user_id
+        print(type(doc))
+        print(doc)
+        return doc.get("user_id") == user_id
 
     documents = recall_vectorstore.similarity_search(
         query, k=3, filter=_filter_function
     )
+    print(documents)
     return [f"Memory found: {document.page_content}" for document in documents]
 
 tools = [save_recall_memory, search_recall_memories]
