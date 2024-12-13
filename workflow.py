@@ -122,25 +122,25 @@ def agent_workflow():
 if __name__ == "__main__":
     import time
     while True:
-    user_goal = input("What do you want to do? ")
-    image = input("Do you want to upload an image? (y/n) ")
-    if image == "y":
-        img = capture_image()
-    else:
-        img = None
-    agent = agent_workflow()
-    config = {"configurable": {"user_id": "1", "thread_id": "1"}}
-    state = State(messages=[HumanMessage(content=user_goal)], img =  img, recall_memories=[], scene_description="")
-    start = time.time() 
-    response = agent.invoke(state, config = config)
-    output = response["messages"]
-    end = time.time()
-    print("FINAL OUTPUT---------------------------------------------------------------------------")
-    print(output[-1].content, f"Time taken: {end-start}")
-    # start = time.time()
-    # flag = tts(output)
-    # end = time.time()
-    # if flag:
-    #     print("Text to speech conversion successful.", f"Time taken: {end-start}")
-    # else:
-    #     print("Text to speech conversion failed.")
+        user_goal = input("What do you want to do? ")
+        image = input("Do you want to upload an image? (y/n) ")
+        if image == "y":
+            img = capture_image()
+        else:
+            img = None
+        agent = agent_workflow()
+        config = {"configurable": {"user_id": "1", "thread_id": "1"}}
+        state = State(messages=[HumanMessage(content=user_goal)], img =  img, recall_memories=[], scene_description="")
+        start = time.time() 
+        response = agent.invoke(state, config = config)
+        output = response["messages"]
+        end = time.time()
+        print("FINAL OUTPUT---------------------------------------------------------------------------")
+        print(output[-1].content, f"Time taken: {end-start}")
+        # start = time.time()
+        # flag = tts(output)
+        # end = time.time()
+        # if flag:
+        #     print("Text to speech conversion successful.", f"Time taken: {end-start}")
+        # else:
+        #     print("Text to speech conversion failed.")
