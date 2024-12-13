@@ -1,27 +1,83 @@
 
+'''
+
+Current issue is infinite tool call recursion!!!!!!!!!!!
+The output returned by tool is understood by the agent as a tool call and it calls the tool again and again.'''
 import os
 from dotenv import load_dotenv
 from utils import capture_image, tts
-from agents import scene_describer, companion
-from typing import TypedDict
+from agents import scene_describer, companion, tools, search_recall_memories
+from typing import TypedDict, List
 from langgraph.graph import END, START, StateGraph
+from langgraph.checkpoint.memory import MemorySaver
+from langgraph.prebuilt import ToolNode
+from langchain_core.embeddings import Embeddings
+from langchain_core.messages import get_buffer_string, HumanMessage, AIMessage
+import tiktoken
+from langchain_core.runnables import RunnableConfig
 
+
+# Setup environment
 load_dotenv()
 openai_api_key = os.getenv("OPENAI_API_KEY")
 
+# Memory 
+memory = MemorySaver()
 
 class State(TypedDict):
-    user_goal: str
+    recall_memories: List[str]
     scene_description: str
     img: str
-    response: str
+    messages: List[tuple]
+
+def route_tools(state: State):
+    """Determine whether to use tools or end the conversation based on the last message.
+
+    Args:
+        state (schemas.State): The current state of the conversation.
+
+    Returns:
+        Literal["tools", "__end__"]: The next step in the graph.
+    """
+    print("Starting route tools")
+    print(state)
+    input("ok")
+
+    msg = state["messages"][-1]
+    if msg.tool_calls:
+        return "tools"
+
+    return END
+
+def load_memories(state: State, config: RunnableConfig) -> State:
+    """Load memories for the current conversation.
+
+    Args:
+        state (schemas.State): The current state of the conversation.
+        config (RunnableConfig): The runtime configuration for the agent.
+
+    Returns:
+        State: The updated state with loaded memories.
+    """
+    convo_str = get_buffer_string(state["messages"])
+    tokenizer = tiktoken.encoding_for_model("gpt-4o-mini")
+    convo_str = tokenizer.decode(tokenizer.encode(convo_str)[:2048])
+    recall_memories = search_recall_memories.invoke(convo_str, config)
+    state["recall_memories"] = recall_memories
+    return state
 
 def scene_desc_node(state: State):
-    state["scene_description"] = scene_describer(state["img"], state["user_goal"], openai_api_key)
+    state["scene_description"] = scene_describer(state["img"], state["messages"], openai_api_key)
     return state
 
 def companion_node(state: State):
-    state["response"] = companion(state["user_goal"], openai_api_key, state["scene_description"])
+    print("Starting companion node")
+    print(state)
+    input("ok")
+    recall_str = (
+        "<recall_memory>\n" + "\n".join(state["recall_memories"]) + "\n</recall_memory>"
+    )
+    state["messages"] = [companion(state["messages"], openai_api_key, recall_str, state["scene_description"])]
     return state
 
 def need_scene_desc(state: State):
@@ -32,11 +88,14 @@ def need_scene_desc(state: State):
 
 def agent_workflow():
     workflow = StateGraph(State)
+    workflow.add_node(load_memories)
     workflow.add_node("scene_desc", scene_desc_node)
     workflow.add_node("companion", companion_node)
-    
+    workflow.add_node("tools", ToolNode(tools))
+
+    workflow.add_edge(START, "load_memories")
     workflow.add_conditional_edges(
-        START,
+        "load_memories",
         need_scene_desc,
         {
             "scene_desc": "scene_desc",
@@ -44,13 +103,25 @@ def agent_workflow():
         }
     )
     workflow.add_edge("scene_desc", "companion")
-    workflow.add_edge("companion", END)
+    workflow.add_conditional_edges("companion", route_tools, ["tools", END])
+    workflow.add_edge("tools", "companion")
 
-    graph = workflow.compile()
+
+    graph = workflow.compile(checkpointer = memory)
+
+    # # Get flowchart
+    # import io
+    # from PIL import Image
+    # img = io.BytesIO(graph.get_graph().draw_mermaid_png())
+    # img = Image.open(img)
+    # img.save("flowchart.png")
+    # print("Flowchart saved as flowchart.png")
     return graph
-    
+
+ 
 if __name__ == "__main__":
     import time
+    while True:
     user_goal = input("What do you want to do? ")
     image = input("Do you want to upload an image? (y/n) ")
     if image == "y":
@@ -58,16 +129,18 @@ if __name__ == "__main__":
     else:
         img = None
     agent = agent_workflow()
-    state = {"user_goal": user_goal, "img": img, "scene_description": None, "response": None} 
+    config = {"configurable": {"user_id": "1", "thread_id": "1"}}
+    state = State(messages=[HumanMessage(content=user_goal)], img =  img, recall_memories=[], scene_description="")
     start = time.time() 
-    response = agent.invoke(state)
-    output = response["response"]
+    response = agent.invoke(state, config = config)
+    output = response["messages"]
     end = time.time()
-    print(output, f"Time taken: {end-start}")
-    start = time.time()
-    flag = tts(output)
-    end = time.time()
-    if flag:
-        print("Text to speech conversion successful.", f"Time taken: {end-start}")
-    else:
-        print("Text to speech conversion failed.")
+    print("FINAL OUTPUT---------------------------------------------------------------------------")
+    print(output[-1].content, f"Time taken: {end-start}")
+    # start = time.time()
+    # flag = tts(output)
+    # end = time.time()
+    # if flag:
+    #     print("Text to speech conversion successful.", f"Time taken: {end-start}")
+    # else:
+    #     print("Text to speech conversion failed.")

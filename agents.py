@@ -2,6 +2,63 @@
 
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_openai import ChatOpenAI 
+from langchain_core.documents import Document
+import uuid
+from langchain_core.runnables import RunnableConfig
+from langchain_core.tools import tool
+from langchain_openai.embeddings import OpenAIEmbeddings
+from langchain_core.vectorstores import InMemoryVectorStore
+import os
+from typing import List
+from dotenv import load_dotenv
+# Tools for memory
+
+
+# Setup environment
+load_dotenv()
+openai_api_key = os.getenv("OPENAI_API_KEY")
+if not openai_api_key:
+    raise ValueError("OpenAI API Key not found")
+
+# For context memory
+recall_vectorstore = InMemoryVectorStore(OpenAIEmbeddings(api_key = openai_api_key))
+
+# Tools to search and store memory
+
+def get_user_id(config: RunnableConfig) -> str:
+    user_id = config["configurable"].get("user_id")
+    if user_id is None:
+        raise ValueError("User ID needs to be provided to save memory")
+    return user_id
+
+@tool
+def save_recall_memory(memory: str, config: RunnableConfig) -> str:
+    """Save conversation memory to vectorstore for later semantic retrieval to aid in providing context-aware responses."""
+    user_id = get_user_id(config)
+    document = Document(
+        page_content = memory, id = str(uuid.uuid4()), metadata = {"user_id": user_id}
+    )
+    recall_vectorstore.add_documents([document])
+    return f"Memory saved for long-term: {memory}"
+
+@tool
+def search_recall_memories(query: str, config: RunnableConfig) -> List[str]:
+    """Search for relevant memories to add context and provide personalized responses."""
+    user_id = get_user_id(config)
+
+    def _filter_function(doc: Document) -> bool:
+        return doc.metadata.get("user_id") == user_id
+
+    documents = recall_vectorstore.similarity_search(
+        query, k=3, filter=_filter_function
+    )
+    return [f"Memory found: {document.page_content}" for document in documents]
+
+tools = [save_recall_memory, search_recall_memories]
+
+
+
+
 
 # Scene describer: Describe the scene based on an image and user goal
 
@@ -53,59 +110,62 @@ def scene_describer(image_base64, user_goal, openai_api_key):
 
 # Companion: Assist the user in achieving their goal based on the scene description if provided
 
-def companion(user_goal, openai_api_key, scene_description = None):
+def companion(user_goal, openai_api_key, recall_memories=None, scene_description=None):
     messages = [
-    SystemMessage(
-        content=[
-            {"type": "text", "text": """
-                You are an AI companion designed to assist a blind user. Your primary goal is to provide clear, actionable, and supportive guidance to help the user understand their surroundings, access information, and accomplish everyday tasks. You should maintain a friendly and helpful tone, adapting to the user's needs in real-time.  
-                    **Key Responsibilities:**
-                    1. **Engage in Natural Conversation:** Respond to the user’s questions, requests, and comments in an informative, empathetic, and concise manner.
-                    2. **Scene Understanding:** You have a tool to analyze images and describe the scene based on users request. Ask the user to upload an image if needed for better aid. The description provides detailed scene information focusing on relevant objects, spatial details, and important landmarks which can help you form a better response.
-                    3. **Actionable Advice:** Provide clear steps or directions if the user needs help performing a task, like finding an object, navigating a room, or identifying landmarks. Use the scene description if provided.
-                    4. **Context-Aware Responses:** Tailor your answers to the user's specific goals or needs without making assumptions. Always ask for clarification if a request is ambiguous. 
-                    5. Use the scene description if provided and adapt your response based on the information provided. Also output the relevant parts of the scene description you used.
-                
-                    **Tone and Style:**  
-                    - Be patient, clear, and concise.  
-                    - Use simple and accessible language.  
-                    - Avoid technical jargon or over-complication unless specifically requested.  
-                
-                    **Examples of Behavior:**  
-                    - If the user says, "Can you help me find my keys?" provide a general guidance to help and encourage the user to provide more information or a picture for visual aid if needed.
-                    - If the user says, "What’s around me?" and provides a scene description of his view, provide a detailed description of the scene focusing on relevant objects and landmarks based on the scene description. 
-                    - If the user asks, "How do I get to the door?" and there is a scene description for a hallway, provide step-by-step spatial guidance like, "The door is about 3 meters ahead, slightly to the left of the hallway based on the scene description."  
-                
-                    Always strive to provide accurate, helpful, and user-centric support.
-                """
-        }
-        ]
-    )
+        SystemMessage(
+            content="""
+You are an AI companion designed to assist a blind user. Your primary goal is to provide clear, supportive, and actionable guidance to help the user understand their surroundings and accomplish tasks.
+
+### Key Capabilities:
+1. **Natural Conversation:**  
+   Respond empathetically and adapt to the user’s emotional and situational context.
+   
+2. **Scene Understanding:**  
+   Use scene descriptions (if provided) to give context-aware advice. Encourage the user to share images for better assistance.
+   
+3. **Actionable Advice:**  
+   Offer clear, step-by-step instructions for tasks like locating objects or navigating spaces.
+
+4. **Memory Utilization:**  
+   - Save important user information for long-term use with the memory tool (`save_recall_memory`).
+   - Search saved memories (`search_recall_memories`) to provide personalized support.
+   - Use memory to tailor responses and ensure consistency over time.
+
+### Guidelines:
+- Always ask for clarification if the request is unclear.
+- Leverage memory and scene descriptions to provide detailed, accurate responses.
+- Use an engaging and empathetic tone to create a natural, helpful interaction.
+
+### Example Interaction:
+- **User Request:** "Can you help me find my keys?"  
+  - Response: "Try checking nearby surfaces. If you share an image, I can assist further."
+- **User Info:** "I keep my keys in the kitchen drawer."  
+  - *Tool:* [Memory saved]  
+  - Response: "Got it! I’ll remember you keep your keys in the kitchen drawer."
+"""
+        )
     ]
+
     if scene_description:
         messages.append(
             SystemMessage(
-                content=[
-                    {"type": "text", "text": f"Based on the visual analysis of users view here is what is found: {scene_description}."},
-                ]
+                content=f"Scene analysis: {scene_description}."
             )
         )
     messages.append(
-        HumanMessage(
-            content=[
-            {"type": "text", "text": f"User goal: {user_goal} "},
-            ]
-        )
+        SystemMessage(content=f"Recall memory: {recall_memories or 'No relevant memories.'}")
     )
-    model = ChatOpenAI(model = "gpt-4o-mini", api_key = openai_api_key)
-    response = model.invoke(messages)
-    return response.content
+    messages.append(
+        HumanMessage(content=f"User goal: {user_goal}")
+    )
+
+    model = ChatOpenAI(model="gpt-4o-mini", api_key=openai_api_key)
+    model_with_tools = model.bind_tools(tools)
+
+    return model_with_tools.invoke(messages)
 
 if __name__ == "__main__":
-    import os
-    from dotenv import load_dotenv
-    load_dotenv()
-    openai_api_key = os.getenv("OPENAI_API_KEY")
+
 
     # # Test scene description
     # user_goal = "Can you help me find my coffee?"
@@ -113,11 +173,11 @@ if __name__ == "__main__":
     # img = capture_image()
     
     # response = scene_describer(img, user_goal, openai_api_key)
-    # print(response)
+    # print(response.content)
 
     # Test companion
-    user_goal = "User goal: Can you help find my Ipad?"
+    user_goal = "User goal: Find my coffee"
     scene_desc = "Your coffee is located on the table to your right. It is in a green cup. On the table, there is also a red item, possibly a notebook or tablet, near the center, and a gray water bottle further back. There are some snacks in a container to the right of the coffee. The table surface appears to be wooden and has a few items scattered across it."
-    response = companion(user_goal, openai_api_key, scene_desc)
-    print(response)
+    response = companion(user_goal, openai_api_key, None, scene_description = None)
+    print(response.content)
 
