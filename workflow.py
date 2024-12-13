@@ -54,15 +54,18 @@ def load_memories(state: State, config: RunnableConfig) -> State:
     Returns:
         State: The updated state with loaded memories.
     """
+    print("Starting load memories")
     convo_str = get_buffer_string(state["messages"])
     tokenizer = tiktoken.encoding_for_model("gpt-4o-mini")
     convo_str = tokenizer.decode(tokenizer.encode(convo_str)[:2048])
     recall_memories = search_recall_memories.invoke(convo_str, config)
     state["recall_memories"] = recall_memories
+    print("Leaving load memories", state)
     return state
 
 def scene_desc_node(state: State):
-    state["scene_description"] = scene_describer(state["img"], state["messages"], openai_api_key)
+    scene_goal = state["messages"][-1].content # Currently assume last message is the goal
+    state["scene_description"] = scene_describer(state["img"], scene_goal, openai_api_key)
     return state
 
 def companion_node(state: State):
